@@ -1,0 +1,273 @@
+# FleetIQ — Real-Time Supply Chain Intelligence Platform
+# Full local stack: Kafka (KRaft) -> Spark Structured Streaming -> MinIO
+#                  + MLflow + FastAPI + React
+#
+# Usage:
+#   cp .env.example .env        # adjust secrets
+#   docker compose up --build   # full stack
+#   docker compose up --build --profile airflow   # + Airflow (batch only)
+#
+# Secrets come from .env (see .env.example); dev defaults are NOT secrets.
+name: fleetiq
+
+services:
+  # ---------------------------------------------------------------- Kafka
+  kafka:
+    image: bitnami/kafka:3.7
+    hostname: kafka
+    environment:
+      KAFKA_CFG_NODE_ID: 0
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
+      KAFKA_KRAFT_CLUSTER_ID: "fleetiq-dev-cluster-01"
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    ports:
+      - "9092:9092"
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      interval: 10s
+      timeout: 10s
+      retries: 12
+      start_period: 20s
+
+  kafka-init:
+    image: bitnami/kafka:3.7
+    depends_on:
+      kafka:
+        condition: service_healthy
+    entrypoint: >
+      /bin/bash -c "
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic fleet.telemetry --partitions 3 --replication-factor 1 &&
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic fleet.gps --partitions 3 --replication-factor 1 &&
+      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
+        --topic fleet.delivery --partitions 3 --replication-factor 1 &&
+      echo 'Kafka topics ready'"
+    restart: "no"
+
+  # ---------------------------------------------------------------- MinIO
+  minio:
+    image: minio/minio:latest
+    command: server /data --console-address ":9001"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-fleetiq}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
+    ports:
+      - "9000:9000"
+      - "9001:9001"
+    volumes:
+      - minio-data:/data
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:9000/minio/health/live"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 10s
+
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-fleetiq} $${MINIO_ROOT_PASSWORD:-fleetiq-dev-password} &&
+      mc mb --ignore-existing local/bronze local/silver local/gold local/mlflow
+        local/checkpoints local/raw &&
+      echo 'MinIO buckets ready'"
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-fleetiq}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
+    restart: "no"
+
+  # ---------------------------------------------------------------- MLflow
+  mlflow:
+    build:
+      context: .
+      dockerfile: docker/mlflow/Dockerfile
+    environment:
+      MLFLOW_BACKEND_STORE_URI: sqlite:////mlflow/mlflow.db
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://mlflow
+      MLFLOW_S3_ENDPOINT_URL: http://minio:9000
+      MLFLOW_S3_IGNORE_TLS: "true"
+      AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-fleetiq}
+      AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
+    ports:
+      - "5000:5000"
+    volumes:
+      - mlflow-data:/mlflow
+    depends_on:
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:5000/health', timeout=3)"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+
+  # --------------------------------------- one-shot data + model bootstrap
+  data-init:
+    build:
+      context: .
+      dockerfile: docker/data-init/Dockerfile
+    environment:
+      MLFLOW_TRACKING_URI: http://mlflow:5000
+      S3_ENDPOINT: http://minio:9000
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fleetiq}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
+      GENERATOR_VEHICLES: ${GENERATOR_VEHICLES:-150}
+      GENERATOR_EVENTS: ${GENERATOR_EVENTS:-150000}
+      GENERATOR_SEED: ${GENERATOR_SEED:-42}
+    volumes:
+      - fleetiq-data:/data
+    depends_on:
+      mlflow:
+        condition: service_healthy
+      minio-init:
+        condition: service_completed_successfully
+    restart: "no"
+
+  # ------------------------------------------ continuous synthetic stream
+  generator:
+    build:
+      context: .
+      dockerfile: docker/data-init/Dockerfile
+    command: >
+      python -m data_generator --stream
+        --vehicles ${GENERATOR_STREAM_VEHICLES:-100}
+        --speed ${GENERATOR_EVENTS_PER_SECOND:-50}
+        --duration 0
+        --kafka-bootstrap kafka:9092
+        --seed ${GENERATOR_SEED:-42}
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+  # ------------------------------------------------ Spark streaming engine
+  spark:
+    build:
+      context: .
+      dockerfile: docker/spark/Dockerfile
+    environment:
+      FLEETIQ_KAFKA_BOOTSTRAP: kafka:9092
+      FLEETIQ_LAKE_BASE: s3a://
+      FLEETIQ_BRONZE_PATH: s3a://bronze
+      FLEETIQ_SILVER_PATH: s3a://silver
+      FLEETIQ_GOLD_PATH: s3a://gold
+      FLEETIQ_CHECKPOINT_PATH: s3a://checkpoints
+      FLEETIQ_S3_ENDPOINT: http://minio:9000
+      FLEETIQ_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fleetiq}
+      FLEETIQ_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
+    ports:
+      - "4040:4040"
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+      minio-init:
+        condition: service_completed_successfully
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:4040/api/v1/applications', timeout=3)"]
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  # ------------------------------------------------------- FastAPI backend
+  backend:
+    build:
+      context: .
+      dockerfile: docker/backend/Dockerfile
+    environment:
+      FLEETIQ_LAKE_BASE: s3a://
+      FLEETIQ_GOLD_ROOT: s3a://gold
+      FLEETIQ_RAW_ROOT: s3://raw
+      FLEETIQ_S3_ENDPOINT: http://minio:9000
+      FLEETIQ_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fleetiq}
+      FLEETIQ_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
+      FLEETIQ_MLFLOW_TRACKING_URI: http://mlflow:5000
+      FLEETIQ_RESULTS_META_DIR: /data/ml_meta
+      FLEETIQ_ANOMALY_META_DIR: /data/gold/anomalies
+      FLEETIQ_CORS_ORIGINS: http://localhost:8081,http://localhost:5173,http://localhost
+    ports:
+      - "8000:8000"
+    volumes:
+      - fleetiq-data:/data
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
+      minio:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c",
+             "import urllib.request; urllib.request.urlopen('http://localhost:8000/health', timeout=3)"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+
+  # --------------------------------------------------------- React frontend
+  frontend:
+    build:
+      context: .
+      dockerfile: docker/frontend/Dockerfile
+    ports:
+      - "8081:80"
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost/"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+
+  # ----------------------------------------- Airflow (batch pipeline only)
+  airflow:
+    image: apache/airflow:2.10.5-python3.11
+    profiles: ["airflow"]
+    environment:
+      AIRFLOW__CORE__LOAD_EXAMPLES: "false"
+      AIRFLOW__CORE__EXECUTOR: SequentialExecutor
+      AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
+    command: standalone
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./airflow/dags:/opt/airflow/dags
+      - ./data:/opt/airflow/data
+      - ./ml:/opt/airflow/ml
+      - ./data_quality:/opt/airflow/data_quality
+      - ./streaming:/opt/airflow/streaming
+      - ./data_lake:/opt/airflow/data_lake
+      - ./monitoring:/opt/airflow/monitoring
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/health || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 8
+      start_period: 60s
+
+volumes:
+  kafka-data:
+  minio-data:
+  mlflow-data:
+  fleetiq-data:
+

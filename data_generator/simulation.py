@@ -35,16 +35,16 @@ from datetime import datetime, timedelta, timezone
 from typing import Any, Iterator
 
 from data_generator.models import (
+    HUB_NAMES,
+    REGION_CENTER_LAT,
+    REGION_CENTER_LON,
+    REGION_RADIUS_DEG,
     AnomalyKind,
     Delivery,
     DeliveryStatus,
     Driver,
     GeoPoint,
     Hub,
-    HUB_NAMES,
-    REGION_CENTER_LAT,
-    REGION_CENTER_LON,
-    REGION_RADIUS_DEG,
     Route,
     Vehicle,
     VehicleType,
@@ -191,7 +191,6 @@ class FleetSimulator:
     def _assign_trip(self, vehicle_id: str) -> None:
         """Assign a route + its deliveries to an idle vehicle during shift."""
         st = self._state[vehicle_id]
-        v = st["vehicle"]
         driver = self.drivers[vehicle_id]
         hour = self.now.hour
         if not (driver.shift_start_hour <= hour < driver.shift_start_hour + driver.shift_duration_hours):
@@ -229,6 +228,8 @@ class FleetSimulator:
 
     def _finish_trip(self, vehicle_id: str) -> None:
         st = self._state[vehicle_id]
+        st.update({"status": "IDLE", "route_id": None, "route": None,
+                   "trip_deliveries": [], "anomaly_active": None})
 
     # ------------------------------------------------------------- event gen
     def _emit_telemetry(self, vehicle_id: str, speed_kmh: float,
@@ -273,6 +274,7 @@ class FleetSimulator:
             "ambient_temp_c": round(ambient, 2),
             "mileage_km": round(st["mileage_km"], 2),
             "idle_time_s": round(idle_s, 1),
+            "dt_seconds": self.dt_seconds,
             "weather": weather.value,
             "traffic_multiplier": round(st["traffic"], 3),
             "event_type": "telemetry",
@@ -503,7 +505,7 @@ def make_routes(seed: int, hubs: list[Hub], count: int = 120) -> list[Route]:
                 round((waypoints[-1].latitude + a.latitude) / 2 + rng.uniform(-0.05, 0.05), 6),
                 round((waypoints[-1].longitude + a.longitude) / 2 + rng.uniform(-0.05, 0.05), 6)))
         waypoints.append(dest.location)
-        dist = sum(a.distance_km(b) for a, b in zip(waypoints, waypoints[1:]))
+        dist = sum(a.distance_km(b) for a, b in zip(waypoints, waypoints[1:], strict=False))
         congestion = round(min(2.5, max(0.5, rng.lognormvariate(0.0, 0.45))), 2)
         avg_speed = 55.0 / congestion
         routes.append(Route(

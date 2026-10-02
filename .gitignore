@@ -16,6 +16,7 @@ htmlcov/
 
 # Data (generated artifacts, not source)
 data/
+data_lake_test/
 data_lake/bronze/*
 data_lake/silver/*
 data_lake/gold/*
@@ -49,3 +50,6 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Local Hadoop winutils (Windows-only dev helper, not part of the project)
+hadoop/

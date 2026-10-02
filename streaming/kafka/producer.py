@@ -14,7 +14,6 @@ from typing import Optional
 
 from kafka import KafkaProducer
 from kafka.admin import KafkaAdminClient, NewTopic
-from kafka.errors import KafkaError, NoBrokersAvailable
 
 from streaming.kafka.schemas import topic_for_event, validate_event
 
@@ -47,7 +46,7 @@ class FleetEventProducer:
             try:
                 self._producer = KafkaProducer(**self._config)
                 log.info("Kafka producer connected to %s", self.bootstrap_servers)
-            except NoBrokersAvailable as exc:
+            except Exception as exc:  # noqa: BLE001 - re-raised with context
                 log.error("No Kafka brokers reachable at %s: %s",
                           self.bootstrap_servers, exc)
                 raise
@@ -86,7 +85,7 @@ def ensure_topics(bootstrap_servers: str, topics: list[str],
     init script, e.g. local development)."""
     try:
         admin = KafkaAdminClient(bootstrap_servers=bootstrap_servers.split(","))
-    except KafkaError as exc:
+    except Exception as exc:  # noqa: BLE001 - no broker = no-op, logged
         log.warning("Could not connect to Kafka admin at %s: %s", bootstrap_servers, exc)
         return
     existing = set(admin.list_topics())

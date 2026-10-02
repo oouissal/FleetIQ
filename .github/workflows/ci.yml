@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  push:
+    branches: [master, main]
+  pull_request:
+
+jobs:
+  python-lint:
+    name: Python lint (ruff)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install ruff
+      - run: ruff check .
+
+  python-tests:
+    name: Python tests (unit / data / ML / API)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -r requirements.txt
+      # Spark + Kafka integration tests are excluded: they need local
+      # infrastructure (winutils / broker) that is not practical in CI.
+      # The streaming logic is covered by the unit-testable rule/enrichment
+      # modules and by the docker stack locally.
+      - run: pytest -m "not spark and not kafka and not integration" --cov=ml --cov=api --cov=data_quality --cov=streaming --cov=data_generator --cov-report=term-missing
+
+  frontend:
+    name: Frontend lint + tests + build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm run lint
+      - run: npm test
+      - run: npm run build
+
+  docker:
+    name: Docker build validation (config + images)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker compose config
+      - run: docker compose build
+        # NOTE: no `docker compose up` in CI — running the full streaming
+        # stack (Kafka + Spark + MinIO + MLflow) inside CI is impractical
+        # and flaky; the stack is exercised locally (see README).

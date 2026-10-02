@@ -116,6 +116,8 @@ class TestReproducibility:
                               seed=2, start_time=start, sim_days=1, dt_seconds=60)
         e1 = list(sim1.run(max_events=300))
         e2 = list(sim2.run(max_events=300))
+        assert [e["event_id"] for e in e1] != [e["event_id"] for e in e2]
+
 
 # --------------------------------------------------------------------------
 # Event content

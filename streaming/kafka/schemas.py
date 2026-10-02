@@ -44,6 +44,7 @@ class TelemetryEvent(BaseModel):
     ambient_temp_c: float = Field(ge=-60, le=70)
     mileage_km: float = Field(ge=0)
     idle_time_s: float = Field(ge=0, le=3600)
+    dt_seconds: int = Field(ge=1, le=3600)
     weather: Literal["clear", "rain", "storm"]
     traffic_multiplier: float = Field(ge=0, le=10)
     event_type: Literal["telemetry"]

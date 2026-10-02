@@ -148,6 +148,13 @@ def write_simulation_output(out_dir: Path, vehicles: list[Vehicle],
 # ---------------------------------------------------------------------------
 # Population builders
 # ---------------------------------------------------------------------------
+def _parse_start(start: str | None) -> datetime:
+    if start:
+        dt = datetime.fromisoformat(start)
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    return datetime.now(timezone.utc).replace(microsecond=0)
+
+
 def build_population(args: argparse.Namespace) -> tuple[list, list, list, list, list]:
     hubs = make_hubs(args.seed)
     vehicles, drivers = make_vehicles(args.seed, args.vehicles)

@@ -1,0 +1,15 @@
+# FleetIQ ruff configuration
+target-version = "py311"
+line-length = 100
+
+[lint]
+select = ["E4", "E7", "E9", "F", "I", "B", "RUF", "BLE"]
+# UP035/UP037/UP045: `from __future__ import annotations` + Optional is the
+# project style; RUF046: int casts guard JSON/parquet types on purpose;
+# PYI034: pyi-style typing rules do not apply to this runtime package;
+# RUF005/RUF007: list concat + zip() style preferences.
+ignore = ["UP035", "UP037", "UP045", "RUF046", "PYI034", "RUF005", "RUF007"]
+
+[lint.per-file-ignores]
+"tests/*" = ["B018"]
+"api/routers/*" = ["B008"]
