@@ -50,9 +50,6 @@ def fuel_per_100km(fuel_rate_lph: Optional[float], speed_kmh: Optional[float]) -
 # ---------------------------------------------------------------------------
 # Spark transforms (row-wise only)
 # ---------------------------------------------------------------------------
-_fuel100_udf = F.udf(fuel_per_100km)
-
-
 def enrich_telemetry(df: DataFrame, watermark: str = "10 minutes") -> DataFrame:
     """Streaming enrichment (row-wise only, no stateful window functions).
 
@@ -61,7 +58,10 @@ def enrich_telemetry(df: DataFrame, watermark: str = "10 minutes") -> DataFrame:
     rejects non-time-windowed LAG over streaming DataFrames. This is a
     documented simplification, not silent data loss.
     """
-    return df.withColumn("fuel_per_100km", _fuel100_udf("fuel_rate_lph", "speed_kmh"))
+    from pyspark.sql.types import DoubleType
+
+    fuel100 = F.udf(fuel_per_100km, DoubleType())
+    return df.withColumn("fuel_per_100km", fuel100("fuel_rate_lph", "speed_kmh"))
 
 
 def enrich_gps(df: DataFrame, watermark: str = "10 minutes") -> DataFrame:

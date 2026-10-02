@@ -2,7 +2,6 @@ import { useQuery } from '@tanstack/react-query';
 import { Link, useParams } from 'react-router-dom';
 import {
   CartesianGrid,
-  Legend,
   Line,
   LineChart,
   ResponsiveContainer,
@@ -22,7 +21,7 @@ export default function VehicleDetail() {
   });
 
   const d = detail.data;
-  const current = d?.current ?? {};
+  const current = (d?.current ?? {}) as Record<string, string | number | null | undefined>;
 
   return (
     <div className="space-y-5">

@@ -12,6 +12,7 @@ conformal interval. Stated in the API response as "method": "residual".
 from __future__ import annotations
 
 import logging
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
@@ -28,6 +29,18 @@ log = logging.getLogger("ml.predict")
 ETA_MODEL_NAME = "eta_prediction"
 ANOMALY_MODEL_NAME = "anomaly_detection"
 INTERVAL_Z = 1.96
+# MLflow 3.x put the local file store in maintenance mode; use a sqlite
+# backend by default unless the user explicitly opted in to the file store.
+LOCAL_SQLITE_URI = "sqlite:///mlruns/mlflow.db"
+
+
+def resolve_tracking_uri(uri: str | None) -> str:
+    """Pick a working local tracking URI when none is configured."""
+    if uri:
+        return uri
+    if os.environ.get("MLFLOW_ALLOW_FILE_STORE") == "true":
+        return ""  # classic ./mlruns file store, explicitly allowed
+    return LOCAL_SQLITE_URI
 DEFAULT_TYPICAL_SPEED_KMH = 55.0
 
 
@@ -35,23 +48,23 @@ DEFAULT_TYPICAL_SPEED_KMH = 55.0
 # MLflow helpers
 # ---------------------------------------------------------------------------
 def _client(tracking_uri: str) -> MlflowClient:
-    return MlflowClient(tracking_uri=tracking_uri or None)
+    return MlflowClient(tracking_uri=resolve_tracking_uri(tracking_uri) or None)
 
 
 def latest_model_version(tracking_uri: str, name: str) -> dict[str, Any]:
     """Metadata of the latest registered version of a model."""
     try:
-        mv = _client(tracking_uri).get_latest_versions(name, stages=[None, "Production"])
-        if not mv:
-            mv = _client(tracking_uri).get_latest_versions(name)
+        mv = _client(tracking_uri).get_latest_versions(name)
         if not mv:
             raise LookupError(f"No registered model named {name!r}")
+        prod = [v for v in mv if v.current_stage == "Production"]
+        chosen = prod[0] if prod else max(mv, key=lambda v: int(v.version))
         return {
             "name": name,
-            "version": mv[0].version,
-            "stage": mv[0].current_stage,
-            "run_id": mv[0].run_id,
-            "creation_timestamp_ms": mv[0].creation_timestamp,
+            "version": chosen.version,
+            "stage": chosen.current_stage,
+            "run_id": chosen.run_id,
+            "creation_timestamp_ms": chosen.creation_timestamp,
         }
     except Exception as exc:  # surface a clean error to the API (re-raised)
         log.error("Could not resolve model %s: %s", name, exc)

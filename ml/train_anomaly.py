@@ -17,6 +17,11 @@ Limitations (stated honestly):
     * The synthetic generator injects anomalies with known ground truth;
       that ground truth is used ONLY in the evaluation report, never in
       training. Real deployments would not have such labels.
+    * Known IsolationForest artifact: with sub-sampled trees
+      (max_samples < n), points absent from a tree's subsample receive
+      spuriously low scores. The contamination offset therefore flags a
+      mixture of genuine deviations and sampling artifacts. This is
+      inherent to the method; documented, not hidden.
 
 Usage:
     python -m ml.train_anomaly --raw data/raw --out data_lake/gold/anomalies
@@ -72,7 +77,9 @@ def pattern_for_event(row: pd.Series, medians: pd.Series,
 
 def train(raw_dir: Path, out_dir: Path, tracking_uri: Optional[str] = None,
           contamination: float = CONTAMINATION) -> dict[str, Any]:
-    mlflow.set_tracking_uri(tracking_uri or "")
+    from ml.predict import resolve_tracking_uri
+
+    mlflow.set_tracking_uri(resolve_tracking_uri(tracking_uri))
     mlflow.set_experiment(EXPERIMENT)
 
     tele = build_anomaly_features(raw_dir)
@@ -124,7 +131,9 @@ def train(raw_dir: Path, out_dir: Path, tracking_uri: Optional[str] = None,
                             "training_duration_s": train_time_s})
         mlflow.set_tag("model_type", "isolation_forest")
         mlflow.sklearn.log_model(model, artifact_path="model",
-                                 registered_model_name=MODEL_NAME)
+                                 registered_model_name=MODEL_NAME,
+                                 skops_trusted_types=["sklearn.tree._tree.Tree"])
+        out_dir.mkdir(parents=True, exist_ok=True)
         joblib.dump(scaler, out_dir / "anomaly_scaler.joblib")
         mlflow.log_artifact(str(out_dir / "anomaly_scaler.joblib"))
         results["run_id"] = run.info.run_id

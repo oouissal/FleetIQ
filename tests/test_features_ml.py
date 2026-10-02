@@ -143,7 +143,7 @@ class TestTraining:
     def test_train_eta_produces_metrics(self, raw_dir, tmp_path):
         from ml.train_eta import train as train_eta
 
-        results = train_eta(raw_dir, tracking_uri=f"file:{tmp_path / 'mlruns'}",
+        results = train_eta(raw_dir, tracking_uri=str(tmp_path / "mlruns"),
                             results_file=tmp_path / "eta_results.json")
         assert "baseline" in results and "final" in results
         final = results["final"]
@@ -159,7 +159,7 @@ class TestTraining:
 
         out = tmp_path / "anomalies"
         results = train_anomaly(raw_dir, out,
-                                tracking_uri=f"file:{tmp_path / 'mlruns'}",
+                                tracking_uri=str(tmp_path / "mlruns"),
                                 contamination=0.05)
         assert results["n_flagged"] > 0
         assert abs(results["flagged_share"] - 0.05) < 0.05
@@ -199,19 +199,31 @@ class TestPredictionService:
         assert X.iloc[0]["weather_rain"] == 0.0
 
     def test_anomaly_predictor_logic(self):
-        from sklearn.ensemble import IsolationForest
-
+        """Unit-test OUR predictor with a stub model: sklearn's Isolation
+        Forest behaviour itself is covered by its own upstream tests."""
         from ml.predict import AnomalyPredictor
 
-        p = AnomalyPredictor(tracking_uri="unused")
-        p._model = IsolationForest(n_estimators=100, contamination=0.02,
-                                   random_state=0).fit(
-            np.random.default_rng(0).normal(size=(2000, len(ANOMALY_FEATURES))))
+        class _StubModel:
+            def __init__(self, flag: int) -> None:
+                self.flag = flag
+
+            def score_samples(self, X):
+                return np.full(len(X), -0.6)
+
+            def predict(self, X):
+                return np.full(len(X), self.flag)
+
         rows = [{f: 0.0 for f in ANOMALY_FEATURES}]
-        rows[0]["engine_temp_c"] = 150.0  # clearly unusual
+        p = AnomalyPredictor(tracking_uri="unused")
+        p._model = _StubModel(-1)
         out = p.predict(rows)
         assert len(out) == 1
-        assert "anomaly_score" in out[0]
         assert out[0]["anomaly_flag"] is True
         assert "Unusual telemetry pattern" in out[0]["description"]
+        assert out[0]["anomaly_score"] == -0.6
+
+        p._model = _StubModel(1)
+        out = p.predict(rows)
+        assert out[0]["anomaly_flag"] is False
+        assert "No unusual pattern" in out[0]["description"]
 

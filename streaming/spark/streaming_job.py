@@ -123,6 +123,7 @@ def build_spark_session(cfg: SparkConfig, app_name: str = "FleetIQStreaming") ->
     builder = (SparkSession.builder
                .appName(app_name)
                .config("spark.sql.session.timeZone", "UTC")
+               .config("spark.sql.shuffle.partitions", "4")
                .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true"))
     if cfg.lake_base.startswith("s3a://"):
         builder = (builder
@@ -211,7 +212,10 @@ def build_domain_queries(spark: SparkSession, cfg: SparkConfig,
     raw = read_source(spark, cfg, event_type, mode, input_dir)
     raw = normalize(raw, event_type)
     validated = with_validation(raw, event_type)
-    trigger = {"availableNow": True} if mode == "file" else {"processingTime": cfg.trigger}
+    # availableNow + watermark does not emit final windows (known Spark
+    # behaviour), so file mode uses a short processing-time trigger instead.
+    trigger = ({"processingTime": "5 seconds"} if mode == "file"
+               else {"processingTime": cfg.trigger})
 
     valid = validated.filter(F.size("validation_errors") == 0).drop("validation_errors")
     invalid = validated.filter(F.size("validation_errors") > 0)
@@ -315,9 +319,17 @@ def main(argv: list[str] | None = None) -> int:
              len(queries), args.mode, domains)
 
     if args.mode == "file":
-        while any(q.isActive for q in queries):
+        # file mode: bounded input; run until all data is processed + the
+        # watermark has flushed all windows, then stop cleanly.
+        run_seconds = args.duration or 240
+        log.info("File mode: running for ~%ss then stopping.", run_seconds)
+        deadline = time.time() + run_seconds
+        while time.time() < deadline and any(q.isActive for q in queries):
             time.sleep(1)
-        log.info("File-mode queries completed.")
+        for q in queries:
+            if q.isActive:
+                q.stop()
+        log.info("File-mode queries stopped.")
         spark.stop()
         return 0
 

@@ -141,6 +141,10 @@ def build_eta_dataset(raw_dir: Path, seed: int = 42) -> pd.DataFrame:
     df["weather_rain"] = (df["weather"] == "rain").astype(int)
     df["weather_storm"] = (df["weather"] == "storm").astype(int)
     df = pd.get_dummies(df, columns=["vehicle_type"], prefix="vehicle_type", dtype=int)
+    # small datasets may not contain every vehicle type; add missing dummies
+    for col in ETA_FEATURES:
+        if col not in df.columns:
+            df[col] = 0
     df = df.dropna(subset=ETA_FEATURES + [TARGET])
 
     # deterministic shuffle-free ordering: sort by dispatch time

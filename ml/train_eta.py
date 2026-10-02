@@ -28,6 +28,7 @@ from xgboost import XGBRegressor
 
 from ml.evaluate import baseline_metrics, regression_metrics, residual_interval
 from ml.features import ETA_FEATURES, TARGET, build_eta_dataset, temporal_split
+from ml.predict import resolve_tracking_uri
 
 log = logging.getLogger("ml.train_eta")
 logging.basicConfig(level=logging.INFO,
@@ -55,9 +56,15 @@ def _fit_and_measure(name: str, model, X_train, y_train, X_val, y_val,
             mlflow.log_params(params)
         mlflow.log_metrics({f"val_{k}": v for k, v in val_metrics.items()})
         mlflow.log_metric("training_duration_s", train_time_s)
-        mlflow.sklearn.log_model(model, artifact_path="model",
-                                 input_example=X_train.iloc[:5],
-                                 registered_model_name=MODEL_NAME)
+        mlflow.sklearn.log_model(
+            model, artifact_path="model",
+            input_example=X_train.iloc[:5],
+            registered_model_name=MODEL_NAME,
+            skops_trusted_types=[
+                "sklearn.tree._tree.Tree",
+                "xgboost.core.Booster",
+                "xgboost.sklearn.XGBRegressor",
+            ])
     log.info("%s: train=%.1fs val_mae=%.2f val_rmse=%.2f val_r2=%.3f",
              name, train_time_s, val_metrics["mae"], val_metrics["rmse"],
              val_metrics["r2"])
@@ -66,7 +73,7 @@ def _fit_and_measure(name: str, model, X_train, y_train, X_val, y_val,
 
 def train(raw_dir: Path, tracking_uri: Optional[str] = None,
           results_file: Optional[Path] = None) -> dict[str, Any]:
-    mlflow.set_tracking_uri(tracking_uri or "")
+    mlflow.set_tracking_uri(resolve_tracking_uri(tracking_uri))
     mlflow.set_experiment(EXPERIMENT)
 
     df = build_eta_dataset(raw_dir)
@@ -133,9 +140,15 @@ def train(raw_dir: Path, tracking_uri: Optional[str] = None,
             mlflow.log_metrics({f"test_{k}": v for k, v in test_metrics.items()})
             mlflow.log_metric("refit_duration_s", time.time() - t0)
             mlflow.set_tag("model_type", best_name)
-            mlflow.sklearn.log_model(best["model"], artifact_path="model",
-                                     input_example=X_train.iloc[:5],
-                                     registered_model_name=MODEL_NAME)
+            mlflow.sklearn.log_model(
+                best["model"], artifact_path="model",
+                input_example=X_train.iloc[:5],
+                registered_model_name=MODEL_NAME,
+                skops_trusted_types=[
+                    "sklearn.tree._tree.Tree",
+                    "xgboost.core.Booster",
+                    "xgboost.sklearn.XGBRegressor",
+                ])
             results["final"] = {
                 "model": best_name,
                 "metrics_test": test_metrics,
