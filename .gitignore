@@ -1,0 +1,51 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
+
+# Environment / secrets
+.env
+*.env.local
+
+# Data (generated artifacts, not source)
+data/
+data_lake/bronze/*
+data_lake/silver/*
+data_lake/gold/*
+!data_lake/bronze/.gitkeep
+!data_lake/silver/.gitkeep
+!data_lake/gold/.gitkeep
+
+# MLflow artifacts
+mlflow/
+mlruns/
+
+# Monitoring reports
+monitoring/reports/*
+!monitoring/reports/.gitkeep
+
+# Node / frontend
+node_modules/
+frontend/dist/
+frontend/.vite/
+frontend/coverage/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+Thumbs.db
+.DS_Store
+
+# Logs
+logs/
+*.log
