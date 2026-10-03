@@ -13,8 +13,6 @@ try:
     from pyspark.sql import SparkSession
     from pyspark.sql import functions as F
 
-    from streaming.spark.streaming_job import with_validation
-
     BASE = datetime(2026, 10, 1, 8, 0, 0, tzinfo=timezone.utc)
     rows = []
     for i in range(3):
@@ -45,5 +43,5 @@ try:
                      % (r["speed_kmh"], r["fails"], r["fails2"]))
     s.stop()
     open("val_debug.txt", "w").write("\n".join(lines))
-except Exception:
+except Exception:  # noqa: BLE001 - debug script records the traceback for diagnosis
     open("val_debug.txt", "w").write(traceback.format_exc())

@@ -184,22 +184,41 @@ cp .env.example .env          # adjust secrets
 docker compose up --build     # full stack
 ```
 
-Services: `kafka` (KRaft), `kafka-init`, `minio` + `minio-init`, `mlflow`,
-`data-init` (one-shot: generate → train → upload gold), `generator`
-(continuous synthetic stream), `spark` (structured streaming), `backend`
-(FastAPI), `frontend` (nginx + React). Airflow is an optional profile:
-`docker compose --profile airflow up -d airflow`. All services have health
-checks; secrets come from `.env` (never committed).
+Services: `kafka` (KRaft), `kafka-init`, `minio` + `minio-buckets`,
+`mlflow`, `data-init` (one-shot: generate → train → publish gold),
+`generator` (continuous synthetic stream), `spark` (structured streaming),
+`backend` (FastAPI), `frontend` (nginx + React). Airflow is an optional
+profile: `docker compose --profile airflow up -d airflow`. All services
+have health checks; secrets come from `.env` (never committed).
+
+### Storage modes
+
+* **S3/MinIO (default)** — lake paths `s3a://bronze|silver|gold`, checkpoints
+  and MLflow artifacts in MinIO.
+* **Filesystem override** — for environments where the MinIO images cannot
+  be pulled from the public registries (observed 2026-10: docker.io pull
+  denied, quay.io 401, ghcr.io denied — the MinIO images were retired from
+  the public registries). The override routes the lake and artifacts to the
+  shared `fleetiq-data` volume instead of MinIO. Nothing else changes.
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.fs.yml up --build
+```
 
 | Service | URL |
 | --- | --- |
 | FleetIQ UI | http://localhost:8081 |
-| API docs (OpenAPI) | http://localhost:8000/docs |
-| MinIO console | http://localhost:9001 |
-| MLflow UI | http://localhost:5000 |
+| API docs (OpenAPI) | http://localhost:8002/docs |
+| MinIO console | http://localhost:9001 (s3 mode only) |
+| MLflow UI | http://localhost:5001 |
 | Spark UI | http://localhost:4040 |
 | Kafka | localhost:9092 |
-| Airflow (profile) | http://localhost:8080 |
+| Airflow (profile) | http://localhost:8082 |
+
+> Host ports 5000/8000 were taken by another local project, so FleetIQ
+> maps MLflow to **5001** and the API to **8002** on the host. Inside the
+> compose network the ports are the defaults (5000/8000), so the stack is
+> unaffected — adjust the host mapping in docker-compose.yml if needed.
 
 ## Testing
 

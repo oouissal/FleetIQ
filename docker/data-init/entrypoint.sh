@@ -24,8 +24,10 @@ python -m ml.train_anomaly --raw /data/raw \
 echo "==> [4/5] Building batch gold tables"
 python -c "from pathlib import Path; from ml.gold import build_all; build_all(Path('/data/raw'), Path('/data/gold'))"
 
-echo "==> [5/5] Uploading gold tables + metadata to MinIO"
-python - <<'PY'
+echo "==> [5/5] Publishing gold tables + metadata"
+
+if [ -n "${S3_ENDPOINT}" ]; then
+  python - <<'PY'
 import os
 import boto3
 from botocore.client import Config
@@ -42,7 +44,6 @@ for path in os.listdir("/data/gold"):
     if os.path.isfile(src):
         s3.upload_file(src, "gold", path)
         print(f"  uploaded gold/{path}")
-# raw data also uploaded so the API can serve history series
 for f in ("telemetry.parquet", "gps.parquet", "deliveries.parquet",
           "routes.parquet", "vehicles.parquet"):
     src = f"/data/raw/{f}"
@@ -51,5 +52,14 @@ for f in ("telemetry.parquet", "gps.parquet", "deliveries.parquet",
         print(f"  uploaded raw/{f}")
 print("  upload complete")
 PY
+else
+  # filesystem-storage mode (docker-compose.fs.yml): stage into the shared
+  # volume layout the backend and API read from.
+  mkdir -p /data/lake/gold /data/lake/raw
+  cp /data/gold/* /data/lake/gold/ 2>/dev/null || true
+  cp -r /data/gold/anomalies /data/lake/gold/ 2>/dev/null || true
+  cp /data/raw/*.parquet /data/lake/raw/ 2>/dev/null || true
+  echo "  staged to /data/lake (filesystem storage mode)"
+fi
 
 echo "==> data-init finished"

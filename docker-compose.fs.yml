@@ -1,0 +1,52 @@
+# FleetIQ filesystem-storage override.
+#
+# Use this ONLY when the MinIO images cannot be pulled from the public
+# registries in your environment (docker.io: pull denied, quay.io: 401,
+# ghcr.io: denied — observed 2026-10). It scales MinIO out and routes the
+# lake + model artifacts to the shared `fleetiq-data` volume instead.
+#
+#   docker compose -f docker-compose.yml -f docker-compose.fs.yml up --build
+services:
+  minio:
+    scale: 0
+  minio-buckets:
+    scale: 0
+
+  mlflow:
+    depends_on: {}
+    environment:
+      MLFLOW_ALLOW_FILE_STORE: "true"
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: file:///mlflow/artifacts
+
+  spark:
+    depends_on:
+      kafka-init:
+        condition: service_completed_successfully
+    environment:
+      FLEETIQ_LAKE_BASE: ""
+      FLEETIQ_BRONZE_PATH: /data/lake/bronze
+      FLEETIQ_SILVER_PATH: /data/lake/silver
+      FLEETIQ_GOLD_PATH: /data/lake/gold
+      FLEETIQ_CHECKPOINT_PATH: /data/lake/checkpoints
+    volumes:
+      - fleetiq-data:/data
+
+  data-init:
+    depends_on:
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_ALLOW_FILE_STORE: "true"
+      S3_ENDPOINT: ""
+
+  backend:
+    depends_on:
+      data-init:
+        condition: service_completed_successfully
+      mlflow:
+        condition: service_healthy
+    environment:
+      MLFLOW_ALLOW_FILE_STORE: "true"
+      FLEETIQ_LAKE_BASE: ""
+      FLEETIQ_GOLD_ROOT: /data/lake/gold
+      FLEETIQ_RAW_ROOT: /data/lake/raw

@@ -1,0 +1,15 @@
+ERR org/apache/spark/spark-sql-kafka-3.5/maven-metadata.xml -> HTTP Error 404: Not Found
+ERR org/apache/spark/spark-sql-kafka/maven-metadata.xml -> HTTP Error 404: Not Found
+OK org/apache/spark/spark-streaming-kafka-0-10_2.13/maven-metadata.xml -> >4.1.1</version>
+      <version>4.1.2</version>
+      <version>4.1.3</version>
+      <version>4.2.0</version>
+      <version>4.2.0-preview1</version>
+      <version>4.2.0-preview2</version>
+      <version>4.2.0-preview3</version>
+      <version>4.2.0-preview4</version>
+      <version>4.2.0-preview5</version>
+    </versions>
+    <lastUpdated>20260716090916</lastUpdated>
+  </versioning>
+</metadata>

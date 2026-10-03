@@ -13,50 +13,47 @@ name: fleetiq
 services:
   # ---------------------------------------------------------------- Kafka
   kafka:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.9.1
     hostname: kafka
     environment:
-      KAFKA_CFG_NODE_ID: 0
-      KAFKA_CFG_PROCESS_ROLES: controller,broker
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_CFG_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-      KAFKA_CFG_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_CFG_AUTO_CREATE_TOPICS_ENABLE: "true"
-      KAFKA_KRAFT_CLUSTER_ID: "fleetiq-dev-cluster-01"
-      ALLOW_PLAINTEXT_LISTENER: "yes"
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:9092
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:9093
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE: "true"
+      CLUSTER_ID: "fleetiq-dev-cluster-01"
     ports:
       - "9092:9092"
     volumes:
-      - kafka-data:/bitnami/kafka
+      - kafka-data:/var/lib/kafka/data
     healthcheck:
-      test: ["CMD-SHELL", "kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
+      test: ["CMD-SHELL", "/opt/kafka/bin/kafka-topics.sh --bootstrap-server localhost:9092 --list >/dev/null 2>&1"]
       interval: 10s
       timeout: 10s
       retries: 12
-      start_period: 20s
+      start_period: 30s
 
   kafka-init:
-    image: bitnami/kafka:3.7
+    image: apache/kafka:3.9.1
     depends_on:
       kafka:
         condition: service_healthy
     entrypoint: >
-      /bin/bash -c "
-      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
-        --topic fleet.telemetry --partitions 3 --replication-factor 1 &&
-      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
-        --topic fleet.gps --partitions 3 --replication-factor 1 &&
-      kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists
-        --topic fleet.delivery --partitions 3 --replication-factor 1 &&
-      echo 'Kafka topics ready'"
+      /bin/bash -c "/opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic fleet.telemetry --partitions 3 --replication-factor 1 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic fleet.gps --partitions 3 --replication-factor 1 && /opt/kafka/bin/kafka-topics.sh --bootstrap-server kafka:9092 --create --if-not-exists --topic fleet.delivery --partitions 3 --replication-factor 1 && echo 'Kafka topics ready'"
     restart: "no"
 
   # ---------------------------------------------------------------- MinIO
+  # NOTE: the MinIO images are unreachable from the public registries in
+  # some environments (docker.io: pull denied; quay.io: 401; ghcr.io: denied
+  # as of 2026-10). If the pull fails for you, run the stack with the
+  # filesystem storage override:
+  #   docker compose -f docker-compose.yml -f docker-compose.fs.yml up --build
   minio:
     image: minio/minio:latest
     command: server /data --console-address ":9001"
@@ -75,28 +72,49 @@ services:
       retries: 12
       start_period: 10s
 
-  minio-init:
-    image: minio/mc:latest
+  minio-buckets:
+    build:
+      context: .
+      dockerfile: docker/data-init/Dockerfile
+    entrypoint:
+      - /bin/sh
+      - -c
+      - |
+        python - <<'PY'
+        import os
+        import boto3
+        from botocore.client import Config
+
+        s3 = boto3.client(
+            's3',
+            endpoint_url='http://minio:9000',
+            aws_access_key_id=os.environ['S3_ACCESS_KEY'],
+            aws_secret_access_key=os.environ['S3_SECRET_KEY'],
+            config=Config(signature_version='s3v4'),
+        )
+
+        for bucket in ['bronze', 'silver', 'gold', 'mlflow', 'checkpoints', 'raw']:
+            try:
+                s3.create_bucket(Bucket=bucket)
+            except Exception:
+                pass
+
+        print('buckets ready')
+        PY
+    environment:
+      S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fleetiq}
+      S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
     depends_on:
       minio:
         condition: service_healthy
-    entrypoint: >
-      /bin/sh -c "
-      mc alias set local http://minio:9000 $${MINIO_ROOT_USER:-fleetiq} $${MINIO_ROOT_PASSWORD:-fleetiq-dev-password} &&
-      mc mb --ignore-existing local/bronze local/silver local/gold local/mlflow
-        local/checkpoints local/raw &&
-      echo 'MinIO buckets ready'"
-    environment:
-      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-fleetiq}
-      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
     restart: "no"
 
   # ---------------------------------------------------------------- MLflow
   mlflow:
-    build:
-      context: .
-      dockerfile: docker/mlflow/Dockerfile
+    image: ghcr.io/mlflow/mlflow:v3.16.1
+    command: mlflow server --host 0.0.0.0 --port 5000
     environment:
+      MLFLOW_ALLOW_FILE_STORE: "true"
       MLFLOW_BACKEND_STORE_URI: sqlite:////mlflow/mlflow.db
       MLFLOW_DEFAULT_ARTIFACT_ROOT: s3://mlflow
       MLFLOW_S3_ENDPOINT_URL: http://minio:9000
@@ -104,11 +122,11 @@ services:
       AWS_ACCESS_KEY_ID: ${MINIO_ROOT_USER:-fleetiq}
       AWS_SECRET_ACCESS_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
     ports:
-      - "5000:5000"
+      - "5001:5000"
     volumes:
       - mlflow-data:/mlflow
     depends_on:
-      minio-init:
+      minio-buckets:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -124,7 +142,8 @@ services:
       context: .
       dockerfile: docker/data-init/Dockerfile
     environment:
-      MLFLOW_TRACKING_URI: http://mlflow:5000
+      MLFLOW_ALLOW_FILE_STORE: "true"
+      MLFLOW_TRACKING_URI: file:///mlflow
       S3_ENDPOINT: http://minio:9000
       S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fleetiq}
       S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
@@ -133,10 +152,11 @@ services:
       GENERATOR_SEED: ${GENERATOR_SEED:-42}
     volumes:
       - fleetiq-data:/data
+      - mlflow-data:/mlflow
     depends_on:
       mlflow:
         condition: service_healthy
-      minio-init:
+      minio-buckets:
         condition: service_completed_successfully
     restart: "no"
 
@@ -177,7 +197,7 @@ services:
     depends_on:
       kafka-init:
         condition: service_completed_successfully
-      minio-init:
+      minio-buckets:
         condition: service_completed_successfully
     healthcheck:
       test: ["CMD", "python", "-c",
@@ -194,20 +214,22 @@ services:
       context: .
       dockerfile: docker/backend/Dockerfile
     environment:
+      MLFLOW_ALLOW_FILE_STORE: "true"
       FLEETIQ_LAKE_BASE: s3a://
       FLEETIQ_GOLD_ROOT: s3a://gold
       FLEETIQ_RAW_ROOT: s3://raw
       FLEETIQ_S3_ENDPOINT: http://minio:9000
       FLEETIQ_S3_ACCESS_KEY: ${MINIO_ROOT_USER:-fleetiq}
       FLEETIQ_S3_SECRET_KEY: ${MINIO_ROOT_PASSWORD:-fleetiq-dev-password}
-      FLEETIQ_MLFLOW_TRACKING_URI: http://mlflow:5000
+      FLEETIQ_MLFLOW_TRACKING_URI: file:///mlflow
       FLEETIQ_RESULTS_META_DIR: /data/ml_meta
       FLEETIQ_ANOMALY_META_DIR: /data/gold/anomalies
       FLEETIQ_CORS_ORIGINS: http://localhost:8081,http://localhost:5173,http://localhost
     ports:
-      - "8000:8000"
+      - "8002:8000"
     volumes:
       - fleetiq-data:/data
+      - mlflow-data:/mlflow
     depends_on:
       data-init:
         condition: service_completed_successfully
@@ -249,7 +271,7 @@ services:
       AIRFLOW__WEBSERVER__EXPOSE_CONFIG: "true"
     command: standalone
     ports:
-      - "8080:8080"
+      - "8082:8080"
     volumes:
       - ./airflow/dags:/opt/airflow/dags
       - ./data:/opt/airflow/data

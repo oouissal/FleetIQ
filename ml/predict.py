@@ -37,6 +37,8 @@ LOCAL_SQLITE_URI = "sqlite:///mlruns/mlflow.db"
 def resolve_tracking_uri(uri: str | None) -> str:
     """Pick a working local tracking URI when none is configured."""
     if uri:
+        if uri.startswith("file://"):
+            os.environ.setdefault("MLFLOW_ALLOW_FILE_STORE", "true")
         return uri
     if os.environ.get("MLFLOW_ALLOW_FILE_STORE") == "true":
         return ""  # classic ./mlruns file store, explicitly allowed

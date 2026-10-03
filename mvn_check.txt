@@ -1,0 +1,3 @@
+ERR org/apache/spark/spark-sql-kafka-3.5_2.13/maven-metadata.xml -> HTTP Error 404: Not Found
+ERR org/apache/spark/spark-sql-kafka_2.13/maven-metadata.xml -> HTTP Error 404: Not Found
+ERR org/apache/spark/spark-sql-kafka-3.5_2.13/4.0.1/spark-sql-kafka-3.5_2.13-4.0.1.jar -> HTTP Error 404: Not Found

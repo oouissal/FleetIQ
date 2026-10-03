@@ -46,7 +46,7 @@ class FleetEventProducer:
             try:
                 self._producer = KafkaProducer(**self._config)
                 log.info("Kafka producer connected to %s", self.bootstrap_servers)
-            except Exception as exc:  # noqa: BLE001 - re-raised with context
+            except Exception as exc:
                 log.error("No Kafka brokers reachable at %s: %s",
                           self.bootstrap_servers, exc)
                 raise
