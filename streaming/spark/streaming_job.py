@@ -124,6 +124,7 @@ def build_spark_session(cfg: SparkConfig, app_name: str = "FleetIQStreaming") ->
                .appName(app_name)
                .config("spark.sql.session.timeZone", "UTC")
                .config("spark.sql.shuffle.partitions", "4")
+               .config("spark.sql.execution.pythonUDF.arrow.enabled", "false")
                .config("spark.sql.streaming.forceDeleteTempCheckpointLocation", "true"))
     if cfg.lake_base.startswith("s3a://"):
         builder = (builder
@@ -194,12 +195,17 @@ def normalize(df: DataFrame, event_type: str) -> DataFrame:
 
 
 def with_validation(df: DataFrame, event_type: str) -> DataFrame:
-    """Attach a validation_errors array column (empty = valid)."""
+    """Attach a validation_errors array column (empty = valid).
+
+    NOTE: array_remove(arr, NULL) returns NULL in Spark, so NULL entries
+    are filtered with array_filter instead — otherwise every row would get
+    a NULL error array and invalid records would silently vanish.
+    """
     fails = [
         F.when(~F.expr(expr), F.lit(name))
         for name, expr in rule_expressions(event_type).items()
     ]
-    errors = F.array_remove(F.array(*fails), F.lit(None))
+    errors = F.filter(F.array(*fails), lambda x: x.isNotNull())
     return df.withColumn("validation_errors", errors)
 
 

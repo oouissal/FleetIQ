@@ -1,0 +1,5 @@
+total=3
+schema=struct<ambient_temp_c:double,driver_id:string,dt_seconds:bigint,engine_load_pct:double,engine_temp_c:double,event_id:string,event_type:string,fuel_level_pct:double,fuel_rate_lph:double,idle_time_s:double,mileage_km:double,route_id:string,speed_kmh:double,timestamp:string,traffic_multiplier:double,vehicle_id:string,weather:string,fails:array<string>,fails2:array<string>>
+row_speed=-5.0 fails=[None, None, None, None, None, 'speed_range', None, None, None, None, None, None] fails2=None
+row_speed=50.0 fails=[None, None, None, None, None, None, None, None, None, None, None, None] fails2=None
+row_speed=50.0 fails=[None, None, None, None, None, None, None, None, None, None, None, None] fails2=None

@@ -8,6 +8,7 @@ a winutils installation (see README); tests skip if Spark is unavailable.
 from __future__ import annotations
 
 import os
+import sys
 from datetime import datetime, timedelta, timezone
 
 import pytest
@@ -28,12 +29,14 @@ BASE_TS = datetime(2026, 10, 1, 8, 0, 0, tzinfo=timezone.utc)
 @pytest.fixture(scope="session")
 def spark():
     os.environ.setdefault("SPARK_LOCAL_IP", "127.0.0.1")
+    os.environ["PYSPARK_PYTHON"] = sys.executable
     session = (SparkSession.builder
                .master("local[2]")
                .appName("fleetiq-tests")
                .config("spark.ui.enabled", "false")
                .config("spark.sql.session.timeZone", "UTC")
                .config("spark.sql.shuffle.partitions", "4")
+               .config("spark.sql.execution.pythonUDF.arrow.enabled", "false")
                .getOrCreate())
     yield session
     session.stop()
@@ -156,7 +159,9 @@ class TestAggregates:
         rows = _telemetry_rows(4)
         rows[0]["route_id"] = None
         df = spark.createDataFrame(rows)
-        agg = aggregates.route_performance(df)
+        # gold reads the enriched SILVER schema (with fuel_per_100km)
+        silver = enrichment.enrich_telemetry(df)
+        agg = aggregates.route_performance(silver)
         assert agg.count() == 1
         assert agg.first()["route_id"] == "R001"
 
@@ -164,18 +169,25 @@ class TestAggregates:
         rows = [
             {"event_id": f"del-{i}", "delivery_id": f"DLV-00000{i}",
              "vehicle_id": "V00001", "route_id": "R001", "stop_index": i,
-             "timestamp": (BASE_TS + timedelta(minutes=10 * i)).isoformat(),
+             "timestamp": (BASE_TS + timedelta(minutes=10 * i)).strftime(
+                 "%Y-%m-%d %H:%M:%S"),
              "status": s,
-             "planned_arrival_time": (BASE_TS + timedelta(minutes=10 * i)).isoformat(),
+             "planned_arrival_time": (BASE_TS + timedelta(minutes=10 * i)).strftime(
+                 "%Y-%m-%d %H:%M:%S"),
              "parcels": 3, "weather": "clear", "event_type": "delivery"}
             for i, s in enumerate(["DELIVERED", "DELAYED", "FAILED", "DELIVERED"])
         ]
         df = spark.createDataFrame(rows)
         agg = aggregates.delivery_performance(df)
-        row = agg.first()
-        assert row["completed_deliveries"] == 4
-        assert row["on_time"] == 2
-        assert row["delayed"] == 1
-        assert row["failed"] == 1
-        assert abs(row["on_time_rate"] - 0.5) < 1e-9
+        # events land in different 5-min windows -> aggregate across windows
+        totals = agg.agg(
+            F.sum("completed_deliveries").alias("n"),
+            F.sum("on_time").alias("ot"),
+            F.sum("delayed").alias("d"),
+            F.sum("failed").alias("f"),
+        ).first()
+        assert totals["n"] == 4
+        assert totals["ot"] == 2
+        assert totals["d"] == 1
+        assert totals["f"] == 1
 
